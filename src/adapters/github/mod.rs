@@ -1,6 +1,7 @@
 mod mapper;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 
 use crate::application::ports::GithubProvider;
@@ -50,13 +51,22 @@ impl GitHubProvider {
             .send()
             .await
             .map_err(AppError::provider)?;
-        match resp.status() {
-            StatusCode::OK => resp.json().await.map_err(AppError::provider),
+        let status = resp.status();
+        if status == StatusCode::OK {
+            return resp.json().await.map_err(AppError::provider);
+        }
+        let body = resp.text().await.unwrap_or_default();
+        match status {
             StatusCode::UNAUTHORIZED => Err(AppError::AuthFailed),
             StatusCode::FORBIDDEN => Err(AppError::PermissionDenied(url.to_string())),
             StatusCode::TOO_MANY_REQUESTS => Err(AppError::RateLimited),
-            s if s.is_server_error() => Err(AppError::provider(format!("github {s}"))),
-            s => Err(AppError::provider(format!("unexpected status {s}"))),
+            StatusCode::UNPROCESSABLE_ENTITY => Err(AppError::provider(format!(
+                "github 422 validation failed for {url}: {body}"
+            ))),
+            s if s.is_server_error() => Err(AppError::provider(format!("github {s}: {body}"))),
+            s => Err(AppError::provider(format!(
+                "unexpected status {s} for {url}: {body}"
+            ))),
         }
     }
 
@@ -84,6 +94,52 @@ impl GitHubProvider {
                 }
             }
             if arr.len() < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(all)
+    }
+
+    /// Paginate list endpoints sorted by `updated` desc; stop when `updated_at` < checkpoint.
+    /// Used for `/pulls` which has no `since` query param (would return 422).
+    async fn paginate_updated_since<M>(
+        &self,
+        build_url: impl Fn(u32) -> String,
+        since: Option<&str>,
+        mut map_item: M,
+    ) -> Result<Vec<ResourceSnapshot>, AppError>
+    where
+        M: FnMut(&serde_json::Value) -> Result<ResourceSnapshot, AppError>,
+    {
+        let since_ts = since.and_then(parse_github_time);
+        let mut page = 1u32;
+        let mut all = Vec::new();
+        loop {
+            let items = self.get_json(&build_url(page)).await?;
+            let Some(arr) = items.as_array() else {
+                break;
+            };
+            if arr.is_empty() {
+                break;
+            }
+            let mut reached_cutoff = false;
+            for item in arr {
+                let snap = map_item(item)?;
+                if let Some(cutoff) = since_ts {
+                    if snap
+                        .remote_updated_at
+                        .as_deref()
+                        .and_then(parse_github_time)
+                        .is_some_and(|updated| updated < cutoff)
+                    {
+                        reached_cutoff = true;
+                        break;
+                    }
+                }
+                all.push(snap);
+            }
+            if reached_cutoff || arr.len() < 100 {
                 break;
             }
             page += 1;
@@ -125,7 +181,7 @@ impl GithubProvider for GitHubProvider {
                     "{api_base}/repos/{owner}/{repo}/issues?state=all&per_page=100&page={page}"
                 );
                 if let Some(since) = &since {
-                    url.push_str(&format!("&since={since}"));
+                    url.push_str(&format!("&since={}", github_since_param(since)));
                 }
                 url
             },
@@ -164,19 +220,15 @@ impl GithubProvider for GitHubProvider {
         let api_base = self.api_base.clone();
         let owner = source.owner.clone();
         let repo = source.repository.clone();
-        let since = since.map(str::to_string);
         let source = source.clone();
-        self.paginate(
+        self.paginate_updated_since(
             move |page| {
-                let mut url = format!(
-                    "{api_base}/repos/{owner}/{repo}/pulls?state=all&per_page=100&page={page}"
-                );
-                if let Some(since) = &since {
-                    url.push_str(&format!("&since={since}"));
-                }
-                url
+                format!(
+                    "{api_base}/repos/{owner}/{repo}/pulls?state=all&per_page=100&page={page}&sort=updated&direction=desc"
+                )
             },
-            move |item| Ok(Some(mapper::pull_request_from_json(&source, item)?)),
+            since,
+            move |item| mapper::pull_request_from_json(&source, item),
         )
         .await
     }
@@ -231,4 +283,16 @@ impl GithubProvider for GitHubProvider {
         })
         .await
     }
+}
+
+fn github_since_param(since: &str) -> String {
+    parse_github_time(since)
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_else(|| since.to_string())
+}
+
+fn parse_github_time(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }

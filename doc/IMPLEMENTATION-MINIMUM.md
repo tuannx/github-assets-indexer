@@ -35,7 +35,7 @@ Tài liệu requirements đầy đủ (~1300 dòng) mô tả MVP hoàn chỉnh. 
 | Credential | `GITHUB_TOKEN` env var only (keychain sau) |
 | Provider | Fake provider trong test; GitHub REST từ S4 |
 | Architecture | `domain` → `application` (ports) → `adapters` → `cli` |
-| Incremental | Checkpoint = `max(remote_updated_at) - 5min overlap`; child fetch theo parent batch |
+| Incremental | Issues: `since` param; PRs: `sort=updated&direction=desc` + page cutoff (no `since` on `/pulls`) |
 
 ---
 

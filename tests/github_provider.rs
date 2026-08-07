@@ -8,7 +8,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 async fn github_provider_fetches_issues_and_pull_requests() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path_regex(r"/repos/acme/demo/issues.*"))
+        .and(path_regex(r"/repos/acme/demo/issues"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "number": 7,
@@ -34,7 +34,7 @@ async fn github_provider_fetches_issues_and_pull_requests() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path_regex(r"/repos/acme/demo/pulls/8/reviews.*"))
+        .and(path_regex(r"/repos/acme/demo/pulls/8/reviews"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "id": 99,
@@ -47,7 +47,7 @@ async fn github_provider_fetches_issues_and_pull_requests() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path_regex(r"/repos/acme/demo/pulls/8/comments.*"))
+        .and(path_regex(r"/repos/acme/demo/pulls/8/comments"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "id": 100,
@@ -81,4 +81,42 @@ async fn github_provider_fetches_issues_and_pull_requests() {
         .await
         .unwrap();
     assert_eq!(inline.len(), 1);
+}
+
+#[tokio::test]
+async fn pulls_incremental_paginates_by_updated_and_stops_at_cutoff() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/repos/acme/demo/pulls$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "number": 20,
+                "title": "New PR",
+                "body": "recent",
+                "updated_at": "2026-03-01T12:00:00Z",
+                "html_url": "https://github.com/acme/demo/pull/20"
+            },
+            {
+                "number": 10,
+                "title": "Old PR",
+                "body": "stale",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "html_url": "https://github.com/acme/demo/pull/10"
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let provider = GitHubProvider::with_api_base(server.uri());
+    let source = Source::new("acme".into(), "demo".into());
+
+    let all = provider.fetch_pull_requests(&source, None).await.unwrap();
+    assert_eq!(all.len(), 2);
+
+    let incremental = provider
+        .fetch_pull_requests(&source, Some("2026-02-01T00:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(incremental.len(), 1);
+    assert_eq!(incremental[0].remote_id, "20");
 }

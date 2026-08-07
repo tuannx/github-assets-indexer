@@ -1,0 +1,32 @@
+---
+description: >-
+  Prioritize local GitHub index (.github-local-indexer) before remote GitHub
+  lookup. Check last_indexed_at and refresh_recommended before searching.
+alwaysApply: true
+---
+
+# GitHub Local Index (repo workspace)
+
+When working in this repository:
+
+1. **Read first:** `.github-local-indexer/INDEX.md` or `status.json`
+2. **Check cache age:** `last_indexed_at`, `index_age_minutes`, `refresh_recommended`
+3. **Search locally:** `.cursor/bin/github-local-indexer search "<query>" --json`
+4. **Refresh cache when stale** (see commands below); mention age to the user
+5. **Do not** call GitHub API unless index is empty or user explicitly asks for remote
+
+## Refresh cache (agent)
+
+```bash
+# Check if refresh needed
+.cursor/bin/github-local-indexer status --json
+
+# Pull latest from GitHub into local index (GITHUB_TOKEN required)
+.cursor/bin/github-local-indexer sync owner/repo --wait
+
+# Add repo then sync (first time)
+.cursor/bin/github-local-indexer repo add owner/repo
+.cursor/bin/github-local-indexer sync owner/repo --wait
+```
+
+Refresh when `refresh_recommended: true`, `freshness: stale`, or `index_age_minutes` > `stale_ttl_minutes` (15).

@@ -1,0 +1,18 @@
+{
+  "10": [
+    {
+      "id": 9200,
+      "body": "Approved with minor suggestions.",
+      "state": "APPROVED",
+      "submitted_at": "2026-02-01T10:30:00Z",
+      "html_url": "https://github.com/acme/demo/pull/10#pullrequestreview-9200"
+    },
+    {
+      "id": 9201,
+      "body": "Needs changes on error handling.",
+      "state": "CHANGES_REQUESTED",
+      "submitted_at": "2026-02-01T11:00:00Z",
+      "html_url": "https://github.com/acme/demo/pull/10#pullrequestreview-9201"
+    }
+  ]
+}

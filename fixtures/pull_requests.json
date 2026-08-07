@@ -1,0 +1,9 @@
+[
+  {
+    "number": 10,
+    "title": "Add pull request sync",
+    "body": "Sync PR metadata and all review contributions.",
+    "updated_at": "2026-02-01T09:00:00Z",
+    "html_url": "https://github.com/acme/demo/pull/10"
+  }
+]

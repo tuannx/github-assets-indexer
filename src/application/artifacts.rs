@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::application::services::App;
 use crate::domain::error::AppError;
-use crate::domain::freshness::FRESHNESS_TTL_MINUTES;
+use crate::domain::freshness::{AUTO_SYNC_AFTER_MINUTES, FRESHNESS_TTL_MINUTES};
 use crate::domain::project::{ProjectWorkspace, STATUS_FILE};
 use crate::domain::resource::SourceStatus;
 use crate::domain::time::now_iso;
@@ -16,6 +16,7 @@ pub struct StatusSnapshot {
     pub schema_version: i32,
     pub database_path: String,
     pub stale_ttl_minutes: i64,
+    pub auto_sync_after_minutes: i64,
     pub sources: Vec<SourceStatus>,
 }
 
@@ -42,6 +43,7 @@ pub async fn refresh_workspace(app: &App, workspace: &ProjectWorkspace) -> Resul
         schema_version: doctor.schema_version,
         database_path: workspace.database_path().display().to_string(),
         stale_ttl_minutes: FRESHNESS_TTL_MINUTES,
+        auto_sync_after_minutes: AUTO_SYNC_AFTER_MINUTES,
         sources,
     };
 
@@ -79,8 +81,9 @@ fn render_index_md(snapshot: &StatusSnapshot, workspace: &ProjectWorkspace) -> S
     let mut md = String::new();
     md.push_str("# GitHub Local Index\n\n");
     md.push_str(
-        "> **Agent priority read.** Check `last_indexed_at`, `index_age_minutes`, and \
-         `refresh_recommended` in this file or `status.json` before searching or hitting GitHub remote.\n\n",
+        "> **Agent priority read.** Check `last_indexed_at`, `index_age_minutes`, \
+         `pending_jobs`, and `auto_sync_after_minutes` before searching. Search local data immediately; \
+         enqueue a refresh only after the configured age threshold.\n\n",
     );
     md.push_str(&format!("- **Snapshot generated:** {}\n", snapshot.generated_at));
     md.push_str(&format!("- **CLI version:** {}\n", snapshot.cli_version));
@@ -88,6 +91,10 @@ fn render_index_md(snapshot: &StatusSnapshot, workspace: &ProjectWorkspace) -> S
     md.push_str(&format!(
         "- **Stale after:** {} minutes (`stale_ttl_minutes`)\n",
         snapshot.stale_ttl_minutes
+    ));
+    md.push_str(&format!(
+        "- **Auto-enqueue after:** {} minutes (`auto_sync_after_minutes`)\n",
+        snapshot.auto_sync_after_minutes
     ));
     md.push_str(&format!(
         "- **Database:** `{}`\n",
@@ -100,37 +107,43 @@ fn render_index_md(snapshot: &StatusSnapshot, workspace: &ProjectWorkspace) -> S
     md.push_str("## Refresh policy (for agents)\n\n");
     md.push_str("| Signal | Action |\n");
     md.push_str("|---|---|\n");
-    md.push_str("| `refresh_recommended: true` or `freshness: stale` | Run `sync owner/repo --wait` |\n");
-    md.push_str("| `freshness: never_synced` | Run `repo add` then `sync --wait` |\n");
-    md.push_str("| `index_age_minutes` > stale TTL | Treat as stale; refresh cache |\n");
+    md.push_str(&format!(
+        "| Any collection has `index_age_minutes` > {} and source `pending_jobs` = 0 | Run `sync owner/repo` without `--wait`; report stale collections and the job ID, then continue with local results. This enqueues work; it does not prove the cache refreshed. |\n",
+        snapshot.auto_sync_after_minutes
+    ));
+    md.push_str("| Any collection exceeds the auto-sync threshold and source `pending_jobs` > 0 | Do not enqueue a duplicate; report that refresh work is already pending/running. |\n");
+    md.push_str("| Collections are stale by TTL but none is older than the auto-sync threshold | Search locally and cite collection ages; do not auto-enqueue solely because `refresh_recommended` is true. |\n");
+    md.push_str("| `freshness: never_synced` or no indexed source | Add and initialize only when the user requests it or confirms. |\n");
     md.push_str("| `freshness: fresh` | Search locally; no sync needed |\n\n");
 
     md.push_str("## Indexed sources\n\n");
     if snapshot.sources.is_empty() {
-        md.push_str("_No repositories indexed yet._ Run:\n\n");
+        md.push_str(
+            "_No repositories indexed yet._ Ask before adding a source. After authorization, enqueue its first sync with:\n\n",
+        );
         md.push_str("```bash\n");
         md.push_str(&format!(
             "{} repo add owner/name\n",
             workspace.config.binary
         ));
-        md.push_str(&format!(
-            "{} sync owner/name --wait\n",
-            workspace.config.binary
-        ));
-        md.push_str("```\n\n");
+        md.push_str(&format!("{} sync owner/name\n", workspace.config.binary));
+        md.push_str(
+            "```\n\nThe command enqueues work; it does not wait for indexing to finish.\n\n",
+        );
     } else {
         md.push_str(
-            "| Repository | Freshness | Last indexed | Age (min) | Refresh? | Resources |\n",
+            "| Repository | Freshness | Last indexed | Age (min) | Refresh? | Pending jobs | Resources |\n",
         );
-        md.push_str("|---|---|---|---:|---:|---:|\n");
+        md.push_str("|---|---|---|---:|---:|---:|---:|\n");
         for s in &snapshot.sources {
             md.push_str(&format!(
-                "| {} | {:?} | {} | {} | {} | {} |\n",
+                "| {} | {:?} | {} | {} | {} | {} | {} |\n",
                 s.slug,
                 s.freshness,
                 format_time(s.last_indexed_at.as_deref()),
                 format_age(s.index_age_minutes),
                 yes_no(s.refresh_recommended),
+                s.pending_jobs,
                 s.resource_count,
             ));
         }
@@ -170,12 +183,12 @@ fn render_index_md(snapshot: &StatusSnapshot, workspace: &ProjectWorkspace) -> S
         workspace.config.binary, workspace.config.binary
     ));
     md.push_str(&format!(
-        "| Pull GitHub → local cache | `{} sync owner/repo --wait` |\n",
+        "| Refresh and wait (explicit request) | `{} sync owner/repo --wait` |\n",
         workspace.config.binary
     ));
     md.push_str(&format!(
-        "| Enqueue background sync | `{} sync owner/repo` then `{} jobs run` |\n",
-        workspace.config.binary, workspace.config.binary
+        "| Enqueue async refresh | `{} sync owner/repo` (reports a job ID; a worker must process it) |\n",
+        workspace.config.binary
     ));
     md.push_str(&format!(
         "| Add repository | `{} repo add owner/repo` |\n",
@@ -229,6 +242,7 @@ mod tests {
             schema_version: 3,
             database_path: "/tmp/index.db".into(),
             stale_ttl_minutes: FRESHNESS_TTL_MINUTES,
+            auto_sync_after_minutes: AUTO_SYNC_AFTER_MINUTES,
             sources: vec![SourceStatus {
                 slug: "acme/demo".into(),
                 freshness: Freshness::Fresh,

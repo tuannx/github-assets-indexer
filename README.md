@@ -21,7 +21,7 @@ github-local-indexer sync owner/name --wait
 github-local-indexer search "login bug" --json
 ```
 
-Agents read `.github-local-indexer/INDEX.md` first — includes `last_indexed_at`, `index_age_minutes`, and `refresh_recommended` for cache decisions.
+Agents read `.github-local-indexer/INDEX.md` first — it reports `last_indexed_at`, `index_age_minutes`, the freshness signal, pending jobs, and the 24-hour async auto-enqueue threshold. A queued job is not a completed refresh.
 
 ## Install options
 
@@ -43,9 +43,10 @@ Per-repo install creates:
 ## Agent workflow
 
 1. Read `.github-local-indexer/INDEX.md` and `status.json`
-2. `github-local-indexer search "<query>" --json` (never calls GitHub)
-3. `github-local-indexer sync owner/repo --wait` if stale or empty
-4. Remote GitHub only when user explicitly asks
+2. If any registered collection is more than 24 hours old, run `github-local-indexer sync owner/repo` without `--wait` when no source job is pending/running; report the stale collections and job ID. This queues work but does not itself run a worker.
+3. `github-local-indexer search "<query>" --json` (local only; mention stale collection ages)
+4. Only add/initialize an unindexed repo after the user requests or confirms it
+5. Remote GitHub only when user explicitly asks
 
 ## Development
 
@@ -69,5 +70,6 @@ cargo run -- doctor
 | Incremental sync + checkpoint overlap | Done |
 | Per-repo workspace + INDEX.md for agents | Done |
 | Job queue (`sync` / `jobs run`) | Done |
+| Agent auto-enqueue after a collection is stale for 24 hours | Done (job worker still required) |
 | Daemon / auto-poll | Planned (S10) |
 | Projects v2, Wiki | Planned (S10) |

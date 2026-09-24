@@ -1,7 +1,7 @@
 ---
 description: >-
   Prioritize local GitHub index (.github-local-indexer) before remote GitHub
-  lookup. Check last_indexed_at and refresh_recommended before searching.
+  lookup. Check per-collection age and enqueue refresh asynchronously after 24 hours.
 alwaysApply: true
 ---
 
@@ -10,10 +10,10 @@ alwaysApply: true
 When working in this repository:
 
 1. **Read first:** `.github-local-indexer/INDEX.md` or `status.json`
-2. **Check cache age:** `last_indexed_at`, `index_age_minutes`, `refresh_recommended`
-3. **Search locally:** `.cursor/bin/github-local-indexer search "<query>" --json`
-4. **Refresh cache when stale** (see commands below); mention age to the user
-5. **Do not** call GitHub API unless index is empty or user explicitly asks for remote
+2. **Check cache age:** `last_indexed_at`, `index_age_minutes`, `auto_sync_after_minutes`, and `pending_jobs`
+3. **Auto-enqueue stale refresh:** if any registered source collection is older than 24 hours and no source job is pending/running, call `sync owner/repo` without `--wait`; report the stale collections and job ID
+4. **Search locally:** `.cursor/bin/github-local-indexer search "<query>" --json`
+5. **Use the CLI only:** do not call GitHub API directly; automatic sync is allowed only through the CLI after the threshold above
 
 ## Refresh cache (agent)
 
@@ -21,12 +21,12 @@ When working in this repository:
 # Check if refresh needed
 .cursor/bin/github-local-indexer status --json
 
-# Pull latest from GitHub into local index (GITHUB_TOKEN required)
-.cursor/bin/github-local-indexer sync owner/repo --wait
+# Enqueue a refresh asynchronously (worker needs GITHUB_TOKEN)
+.cursor/bin/github-local-indexer sync owner/repo
 
 # Add repo then sync (first time)
 .cursor/bin/github-local-indexer repo add owner/repo
 .cursor/bin/github-local-indexer sync owner/repo --wait
 ```
 
-Refresh when `refresh_recommended: true`, `freshness: stale`, or `index_age_minutes` > `stale_ttl_minutes` (15).
+Auto-enqueue only when a collection's `index_age_minutes` > `auto_sync_after_minutes` (1440 by default). Use collection ages because the source-level age records the newest local write and can hide stale collections. A stale marker at the 15-minute freshness TTL is still useful for reporting, but does not trigger an automatic refresh. Do not enqueue duplicate work when source `pending_jobs` is nonzero. The CLI `sync` command only records a durable job; the current release has no always-on daemon, so report “queued” rather than “refreshed” until a worker processes it and the job succeeds.

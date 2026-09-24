@@ -3,6 +3,8 @@ use chrono::{DateTime, Utc};
 use crate::domain::resource::Freshness;
 
 pub const FRESHNESS_TTL_MINUTES: i64 = 15;
+/// Agent-triggered refresh threshold; freshness can be stale before auto-sync is due.
+pub const AUTO_SYNC_AFTER_MINUTES: i64 = 24 * 60;
 
 pub fn index_age_minutes(last_indexed_at: Option<&str>) -> Option<i64> {
     let parsed = parse_rfc3339(last_indexed_at?)?;

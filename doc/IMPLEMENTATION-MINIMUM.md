@@ -95,9 +95,13 @@ src/
 ## Agent workflow (mặc định sau install)
 
 1. Đọc `.github-local-indexer/INDEX.md` và `status.json`
-2. `search "<query>" --json` (local only)
-3. `sync owner/repo --wait` nếu stale/empty
-4. Remote GitHub chỉ khi user yêu cầu
+2. Đọc tuổi từng collection vì source-level age là lần ghi local mới nhất và có thể che collection cũ
+3. Nếu collection nào vượt `auto_sync_after_minutes` (mặc định 1440) và source chưa có job pending/running, gọi `sync owner/repo` không có `--wait`; báo collection stale và job ID
+4. `search "<query>" --json` (local only), kể cả khi refresh vừa được enqueue
+5. Nếu chỉ stale theo TTL ngắn hơn hoặc đã có job, nêu tuổi/trạng thái và không enqueue trùng
+6. Chỉ add và initial-sync repo chưa đăng ký khi user yêu cầu hoặc xác nhận
+7. Job được enqueue chưa đồng nghĩa cache đã refresh; chỉ báo hoàn tất sau khi worker trả kết quả thành công
+8. Remote GitHub chỉ khi user yêu cầu
 
 CLI **yêu cầu workspace** (config.json trong cây thư mục hiện tại). Nếu chưa install:
 

@@ -557,6 +557,15 @@ Baseline proposal để benchmark:
 Giá trị mặc định cần được benchmark và ghi trong config reference; không hardcode
 policy trong search layer.
 
+Với workflow agent mặc định, `freshness` vẫn chuyển sang `stale` theo TTL của
+collection, nhưng agent chỉ tự enqueue refresh khi tuổi của bất kỳ collection
+nào vượt 1.440 phút (24 giờ). Source-level age ghi nhận lần ghi local mới nhất
+nên không thay thế tuổi từng collection. `refresh_recommended` một mình không
+kích hoạt enqueue. Enqueue phải trả job ID ngay, không chặn local search; agent
+tiếp tục dùng kết quả local và báo rõ job đang queued. Không enqueue trùng khi
+source đã có job pending/running. Explicit user sync vẫn có thể chạy ở bất kỳ
+tuổi cache nào.
+
 #### FR-026 — Staleness transition
 
 Quy tắc tối thiểu:
@@ -575,7 +584,10 @@ identity hoặc cơ chế dedupe duy nhất.
 #### FR-027 — Background refresh
 
 Khi data hết TTL, search vẫn trả local data ngay. Hệ thống có thể enqueue refresh
-với debounce, nhưng không được chặn search để đợi network.
+với debounce, nhưng không được chặn search để đợi network. Theo policy agent mặc
+định, tự enqueue chỉ xảy ra khi index đã cũ hơn 24 giờ; tuổi vượt TTL ngắn hơn
+vẫn được báo stale nhưng không tự enqueue. Enqueue trả job ID và không được xem
+là refresh hoàn tất cho tới khi worker báo thành công.
 
 #### FR-028 — Durable local notifications
 
